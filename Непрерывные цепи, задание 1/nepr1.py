@@ -1,10 +1,7 @@
 from typing import List
 import itertools as it
 from random import choices
-<<<<<<< HEAD
 from collections import deque
-=======
->>>>>>> 1eb5dd7b038710d97dc880a0c88af1115f727555
 
 import numpy as np
 from numpy.typing import NDArray as Arr
