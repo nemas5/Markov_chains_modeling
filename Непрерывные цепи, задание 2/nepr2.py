@@ -10,6 +10,3 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from scipy.integrate import simpson
-
-
-
