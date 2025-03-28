@@ -1,15 +1,14 @@
 from typing import List
 import itertools as it
 from random import choices
-from collections import Counter
-from typing import Union
+from random import randint, seed
+from collections import deque
 
 import numpy as np
 from numpy.typing import NDArray as Arr
 import networkx as nx
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
-from scipy.integrate import simpson
 
 
 def draw_labeled_multigraph(G, attr_name, ax=None):
@@ -49,26 +48,6 @@ def draw_graph(matrix: List[List[float]], nodes: list):
                 graph.add_edge(node_names[i], node_names[j], l=matrix[i][j])
     draw_labeled_multigraph(graph, "l")
     plt.show()
-
-
-N = 175
-G = 6
-
-lam_a = G + (N % 3)
-lam_b = G + (N % 5)
-N_A = 2 + (G % 2)
-N_B = 1 + (N % 2)
-R_A = 1 + (G % 2)
-R_B = 2 - (G % 2)
-NU = (N_A + N_B - (G % 2)) * (G + (N % 4))
-
-print(f"lam_a = {lam_a}")
-print(f"lam_b = {lam_b}")
-print(f"N_A = {N_A}")
-print(f"N_B = {N_B}")
-print(f"R_A = {R_A}")
-print(f"R_B = {R_B}")
-print(f"NU = {NU}")
 
 
 # Предполагается нагруженный резерв A и ненагруженный резерв B
@@ -226,10 +205,161 @@ def imitation(matrix, t_end):
     print(res)
 
 
-Q, directions = fill_matrix(N_A, N_B, R_A, R_B, lam_a, lam_b, NU)
-PI = kolm_algebra(Q)
-math_exp(PI, directions, 1, N_B)
-T = solve(Q, PI)
-imitation(Q, T)
-# Не уверен, что совсем правильна модель, в которой нет очереди для уже взятых на ремонт узлов
-# или как-то нужно изменять коэффициент починки (вроде нет)
+class WorkingDevice:
+    def __init__(self, start, num, intensity):
+        self.__id = num
+        self.__intense = intensity
+        self.__break_down = self.new_break_down_time(start)
+
+    def new_break_down_time(self, start):
+        return start + np.random.exponential(1 / self.__intense)
+
+    def upd_break_down_time(self, start):
+        self.__break_down = self.new_break_down_time(start)
+
+    def get_break_down(self):
+        return self.__break_down
+
+    def get_id(self):
+        return self.__id
+
+
+def discrete_modeling(na, nb, ra, rb, lma, lmb, lnu):
+    ra = 0
+    log_file = open("log.txt", "w", encoding="utf-8")
+
+    type_a_active = {WorkingDevice(0, i, lma) for i in range(na)}
+    type_b_active = {WorkingDevice(0, i, lmb) for i in range(nb)}
+    type_b_reserve = {WorkingDevice(0, i + nb, lmb) for i in range(rb)}
+    repair_que_a = deque()
+    repair_que_b = deque()
+
+    current_time = 0.
+    end_time = 0.3689996302608915 * 2
+    repair_start = current_time
+    while current_time < end_time:
+        next_repair = end_time * 2
+        next_repair_type = "a"
+        next_break_a = WorkingDevice(end_time * 2, 1000, lma)
+        next_break_b = WorkingDevice(end_time * 2, 1000, lmb)
+        print(f"Время до - {current_time}:", file=log_file)
+
+        # Выясняем приоритет на починку
+        if len(repair_que_a) > len(repair_que_b):
+            next_repair = repair_start + repair_que_a[0][1]  # (WorkingDevice, repairing_time)
+            next_repair_type = "a"
+            print("Для починки приоритетно устройство типа A (количество)", file=log_file)
+        elif len(repair_que_b) > len(repair_que_a):
+            next_repair = repair_start + repair_que_b[0][1]
+            next_repair_type = "b"
+            print("Для починки приоритетно устройство типа B (количество)", file=log_file)
+        elif len(repair_que_b) + len(repair_que_a) == 0:
+            print("Устройства не нуждаются в ремонте", file=log_file)
+        elif lma > lmb:
+            next_repair = repair_start + repair_que_a[0][1]
+            next_repair_type = "a"
+            print("Для починки приоритетно устройство типа A (интенсивность)", file=log_file)
+        else:
+            next_repair = repair_start + repair_que_b[0][1]
+            next_repair_type = "b"
+            print("Для починки приоритетно устройство типа B (интенсивность)", file=log_file)
+
+        # Какое следующее устройство типа A сломается
+        if len(type_a_active):
+            next_break_a = min(type_a_active, key=lambda dev: dev.get_break_down())
+
+        # Какое следующее устройство типа B сломается
+        if len(type_b_active):
+            next_break_b = min(type_b_active, key=lambda dev: dev.get_break_down())
+
+        # Следующее событие - починка
+        print(next_repair, next_break_b.get_break_down(), next_break_a.get_break_down(), file=log_file)
+        if next_repair <= next_break_b.get_break_down() and next_repair <= next_break_a.get_break_down():
+            # Чиним A
+            if next_repair_type == "a":
+                new_event = repair_que_a.popleft()
+                new_event[0].upd_break_down_time(current_time + new_event[1])
+                type_a_active.add(new_event[0])
+                print(f"Починено устройство типа A, номер {new_event[0].get_id()},"
+                      f" введено в эксплуатацию", file=log_file)
+            # Чиним B
+            else:
+                new_event = repair_que_b.popleft()
+                new_event[0].upd_break_down_time(current_time + new_event[1])  # проверить, где меняется
+                if len(type_b_active) == nb:
+                    type_b_reserve.add(new_event[0])
+                    print(f"Починено устройство типа B, номер {new_event[0].get_id()},"
+                          f" пополнило резерв", file=log_file)
+                else:
+                    type_b_active.add(new_event[0])
+                    print(f"Починено устройство типа B, номер {new_event[0].get_id()},"
+                          f" введено в эксплуатацию", file=log_file)
+            current_time += new_event[1]
+            repair_start = current_time
+            # new_event[0].new_break_down_time()  # Мб можно так?
+
+        # Следующее событие - поломка устройства типа B
+        elif next_break_b.get_break_down() <= next_repair \
+                and next_break_b.get_break_down() <= next_break_a.get_break_down():
+            current_time = next_break_b.get_break_down()
+            type_b_active.remove(next_break_b)
+            if len(repair_que_a) + len(repair_que_b) == 0:
+                repair_start = current_time
+            repair_que_b.append((next_break_b, np.random.exponential(1 / lnu)))  # ТОЛЬКО время починки
+            print(f"Сломалось устройство типа B, номер {next_break_b.get_id()}",
+                  file=log_file)
+            if len(type_b_reserve) > 0:  # Переход из резерва
+                new_reserve = type_b_reserve.pop()
+                type_b_active.add(new_reserve)
+                print(f"Задействован резервный элемент B, номер {new_reserve.get_id()}",
+                      file=log_file)
+
+        # Следующее событие - поломка устройства типа A
+        else:
+            current_time = next_break_a.get_break_down()
+            if len(repair_que_a) + len(repair_que_b) == 0:
+                repair_start = current_time
+            type_a_active.remove(next_break_a)
+            repair_que_a.append((next_break_a, np.random.exponential(1 / lnu)))
+            print(f"Сломалось устройство типа A, номер {next_break_a.get_id()}",
+                  file=log_file)
+
+        # Работоспособность системы
+        print(f"Время после - {current_time}:", file=log_file)
+        if len(type_a_active) > 0 and len(type_b_active) >= nb:
+            print(f"Система в рабочем состоянии", file=log_file)
+        else:
+            print("Система стоит", file=log_file)
+        print("\n", file=log_file)
+
+    log_file.close()
+
+
+if __name__ == '__main__':
+    N = 175
+    G = 6
+
+    lam_a = G + (N % 3)
+    lam_b = G + (N % 5)
+    N_A = 2 + (G % 2)
+    N_B = 1 + (N % 2)
+    R_A = 1 + (G % 2)
+    R_B = 2 - (G % 2)
+    NU = (N_A + N_B - (G % 2)) * (G + (N % 4))
+
+    print(f"lam_a = {lam_a}")
+    print(f"lam_b = {lam_b}")
+    print(f"N_A = {N_A}")
+    print(f"N_B = {N_B}")
+    print(f"R_A = {R_A}")
+    print(f"R_B = {R_B}")
+    print(f"NU = {NU}")
+
+    Q, directions = fill_matrix(N_A, N_B, R_A, R_B, lam_a, lam_b, NU)
+    PI = kolm_algebra(Q)
+    math_exp(PI, directions, 1, N_B)
+    T = solve(Q, PI)
+    imitation(Q, T)
+
+    print("\nДискретно-событийное моделирование:\n")
+    discrete_modeling(N_A, N_B, R_A, R_B, lam_a, lam_b, NU)
